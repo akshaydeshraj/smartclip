@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get tarball SHA256
+        id: sha
+        run: |
+          SHA=$(curl -sL "https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz" | shasum -a 256 | cut -d' ' -f1)
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: akshaydeshraj/homebrew-smartclip
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          cat > Formula/smartclip.rb << 'FORMULA'
+          class Smartclip < Formula
+            desc "Fix multi-line shell commands before they hit your terminal"
+            homepage "https://github.com/akshaydeshraj/smartclip"
+            url "https://github.com/akshaydeshraj/smartclip/archive/refs/tags/TAG.tar.gz"
+            sha256 "SHA256"
+            version "VERSION"
+            license "MIT"
+
+            def install
+              bin.install "smartclip"
+              (share/"smartclip/integrations").install Dir["integrations/*"]
+            end
+
+            def caveats
+              <<~EOS
+                Add this to your shell config to enable auto-fix on paste:
+
+                  # zsh (~/.zshrc)
+                  source #{share}/smartclip/integrations/smartclip.zsh
+
+                  # bash (~/.bashrc)
+                  source #{share}/smartclip/integrations/smartclip.bash
+
+                  # fish (~/.config/fish/config.fish)
+                  source #{share}/smartclip/integrations/smartclip.fish
+              EOS
+            end
+
+            test do
+              input = "$ git add .\n$ git push"
+              expected = "git add .; git push"
+              assert_equal expected, pipe_output(bin/"smartclip", input).strip
+            end
+          end
+          FORMULA
+          sed -i "s|TAG|${{ github.ref_name }}|g" Formula/smartclip.rb
+          sed -i "s|SHA256|${{ steps.sha.outputs.sha256 }}|g" Formula/smartclip.rb
+          sed -i "s|VERSION|${{ steps.version.outputs.version }}|g" Formula/smartclip.rb
+
+      - name: Push to homebrew-smartclip
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/smartclip.rb
+          git commit -m "Update smartclip to ${{ steps.version.outputs.version }}"
+          git push
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set version and publish
+        run: |
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
