@@ -1,0 +1,37 @@
+{
+  "name": "smartclip-cli",
+  "version": "0.1.0",
+  "description": "Fix multi-line shell commands before they hit your terminal",
+  "directories": {
+    "bin": "."
+  },
+  "bin": {
+    "smartclip": "smartclip"
+  },
+  "files": [
+    "smartclip",
+    "integrations/",
+    "LICENSE",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akshaydeshraj/smartclip.git"
+  },
+  "keywords": [
+    "clipboard",
+    "shell",
+    "terminal",
+    "paste",
+    "command-line",
+    "cli",
+    "multiline"
+  ],
+  "author": "Akshay Deshraj",
+  "license": "MIT",
+  "homepage": "https://github.com/akshaydeshraj/smartclip",
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}

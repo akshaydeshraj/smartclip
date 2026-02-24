@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# smartclip — fix multi-line shell commands for pasting
+# Usage: echo "multi-line command" | smartclip        (filter mode)
+#        smartclip fix                                 (fix clipboard in-place)
+#        source integrations/smartclip.zsh             (auto-fix on paste)
+
+# ── Subcommand: fix clipboard in-place ───────────────────────────
+if [[ "${1:-}" == "fix" ]]; then
+  clipboard="$(pbpaste 2>/dev/null || xclip -o 2>/dev/null || wl-paste 2>/dev/null)" || {
+    echo "smartclip: cannot read clipboard" >&2
+    exit 1
+  }
+  fixed="$(printf '%s' "$clipboard" | "$0")"
+  rc=$?
+  if [[ $rc -eq 0 && "$fixed" != "$clipboard" ]]; then
+    printf '%s' "$fixed" | pbcopy 2>/dev/null || printf '%s' "$fixed" | xclip 2>/dev/null || printf '%s' "$fixed" | wl-copy 2>/dev/null
+    echo "smartclip: fixed" >&2
+  else
+    echo "smartclip: no changes needed" >&2
+  fi
+  exit $rc
+fi
+
+# ── Read stdin ───────────────────────────────────────────────────
+if [[ -t 0 ]]; then
+  echo "Usage: echo \"multi-line command\" | smartclip" >&2
+  exit 1
+fi
+input="$(cat)"
+
+# Pass through empty input
+[[ -z "$input" ]] && { printf '%s' "$input"; exit 1; }
+
+# Pass through single-line content
+line_count="$(printf '%s\n' "$input" | wc -l | tr -d ' ')"
+[[ "$line_count" -le 1 ]] && { printf '%s' "$input"; exit 1; }
+
+# Size guard — skip huge content (not a shell command)
+[[ "${#input}" -gt 10000 ]] && { printf '%s' "$input"; exit 1; }
+
+# ── Detection: is this a shell command? ──────────────────────────
+score=0
+
+# Strong signals (+3)
+[[ "$input" == "#!/"* ]] && (( score += 3 ))
+
+# Lines starting with $ or > prompt
+prompt_count="$(printf '%s\n' "$input" | grep -cE '^[[:space:]]*[\$>][[:space:]]+[^[:space:]]' 2>/dev/null)" || prompt_count=0
+[[ "$prompt_count" -gt 0 ]] && (( score += 3 ))
+
+# Medium signals (+2)
+# Known command names at start of line (after optional whitespace or prompt)
+cmd_pattern='^[[:space:]]*([\$>][[:space:]]+)?(git|docker|kubectl|npm|npx|yarn|pnpm|pip|cargo|make|curl|wget|ssh|scp|rsync|tar|brew|apt|yum|dnf|pacman|sudo|cd|ls|cat|echo|export|source|chmod|chown|mkdir|cp|mv|rm|find|grep|sed|awk|xargs|tee|sort|uniq|wc|head|tail|python|node|ruby|go|rustc|java|gcc|clang|cmake|terraform|ansible|helm|aws|gcloud|az|rtk|gh|bun|deno)[[:space:]]'
+cmd_count="$(printf '%s\n' "$input" | grep -cE "$cmd_pattern" 2>/dev/null)" || cmd_count=0
+[[ "$cmd_count" -gt 0 ]] && (( score += 2 ))
+[[ "$cmd_count" -gt 2 ]] && (( score += 1 ))  # bonus for 3+ command lines
+
+# Shell operators at line endings (pipe, &&, ||, \)
+op_count="$(printf '%s\n' "$input" | grep -cE '(\||&&|\|\||\\)[[:space:]]*$' 2>/dev/null)" || op_count=0
+[[ "$op_count" -gt 0 ]] && (( score += 2 ))
+
+# Heredoc markers
+printf '%s\n' "$input" | grep -qE '<<-?[[:space:]]*'\''?[A-Za-z_]+'\''?' 2>/dev/null && (( score += 2 ))
+
+# Variable assignments
+printf '%s\n' "$input" | grep -qE '^[[:space:]]*(export[[:space:]]+)?[A-Z_][A-Z0-9_]*=' 2>/dev/null && (( score += 2 ))
+
+# Weak signals (+1)
+[[ "$input" == *'$('* ]] && (( score += 1 ))
+[[ "$input" == *'`'* ]] && (( score += 1 ))
+[[ "$input" == *';'* ]] && (( score += 1 ))
+printf '%s\n' "$input" | grep -qE '[[:space:]]--?[a-zA-Z]' 2>/dev/null && (( score += 1 ))
+printf '%s\n' "$input" | grep -qE '[0-9]*>[&]?|[0-9]*<|>>|/dev/null' 2>/dev/null && (( score += 1 ))
+
+# Negative signals
+if [[ "$input" =~ ^[[:space:]]*[\{\[] ]] && [[ "$input" =~ [\}\]][[:space:]]*$ ]]; then
+  (( score -= 4 ))
+fi
+
+prose_count="$(printf '%s\n' "$input" | grep -cE '^[^|&;$\\]{80,}$' 2>/dev/null)" || prose_count=0
+if [[ "$line_count" -gt 0 ]] && (( prose_count * 100 / line_count > 50 )); then
+  (( score -= 3 ))
+fi
+
+# Threshold check
+if (( score < 3 )); then
+  printf '%s' "$input"
+  exit 1
+fi
+
+# ── Fixing: join lines intelligently ─────────────────────────────
+mapfile -t lines <<< "$input"
+
+# Phase 1: Strip prompt characters
+for i in "${!lines[@]}"; do
+  line="${lines[$i]}"
+  line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*[\$>][[:space:]]//')"
+  line="$(printf '%s' "$line" | sed 's/[[:space:]]*$//')"
+  lines[$i]="$line"
+done
+
+# Phase 2: Join lines into logical commands
+commands=()
+current=""
+continuing=false  # tracks if previous line ended with a continuation
+in_heredoc=""
+heredoc_delim=""
+
+for i in "${!lines[@]}"; do
+  line="${lines[$i]}"
+
+  # Skip blank lines between commands (only when not continuing)
+  if [[ -z "${line// /}" ]]; then
+    if [[ -z "$current" ]]; then
+      continue
+    elif [[ "$continuing" == false ]]; then
+      commands+=("$current")
+      current=""
+      continue
+    fi
+  fi
+
+  # Heredoc handling — consume until closing delimiter
+  if [[ -n "$in_heredoc" ]]; then
+    current+=$'\n'"$line"
+    if [[ "$line" == "$heredoc_delim" ]]; then
+      in_heredoc=""
+      heredoc_delim=""
+      commands+=("$current")
+      current=""
+      continuing=false
+    fi
+    continue
+  fi
+
+  # Check if this line starts a heredoc
+  if [[ "$line" =~ \<\<-?[[:space:]]*\'?([A-Za-z_][A-Za-z0-9_]*)\'? ]]; then
+    heredoc_delim="${BASH_REMATCH[1]}"
+    in_heredoc=1
+    if [[ -n "$current" ]]; then
+      current+=" $line"
+    else
+      current="$line"
+    fi
+    continue
+  fi
+
+  # Check if this line is an indented non-command (likely a continuation arg)
+  is_indented_arg=false
+  if [[ -n "$current" ]] && [[ "$line" =~ ^[[:space:]]+ ]]; then
+    # Line starts with whitespace — check if it starts with a known command
+    trimmed="$(printf '%s' "$line" | sed 's/^[[:space:]]*//')"
+    if ! [[ "$trimmed" =~ ^(git|docker|kubectl|npm|npx|yarn|pnpm|pip|cargo|make|curl|wget|ssh|scp|rsync|tar|brew|apt|yum|dnf|pacman|sudo|cd|ls|cat|echo|export|source|chmod|chown|mkdir|cp|mv|rm|find|grep|sed|awk|xargs|tee|sort|uniq|wc|head|tail|python|node|ruby|go|rustc|java|gcc|clang|cmake|terraform|ansible|helm|aws|gcloud|az|rtk|gh|bun|deno)[[:space:]] ]]; then
+      is_indented_arg=true
+    fi
+  fi
+
+  # Append line to current (or start new command)
+  if [[ -n "$current" ]] && [[ "$continuing" == true ]]; then
+    # Previous line requested continuation — append this line
+    current+=" $line"
+  elif [[ "$line" =~ ^[[:space:]]*(\||&&|\|\|) ]] && [[ -n "$current" ]]; then
+    # Line starts with operator — join with previous
+    current+=" $line"
+  elif [[ "$is_indented_arg" == true ]]; then
+    # Indented non-command line — likely a continuation argument
+    current+=" $line"
+  elif [[ -n "$current" ]]; then
+    # Previous command is complete — emit it, start new
+    commands+=("$current")
+    current="$line"
+  else
+    current="$line"
+  fi
+
+  # Check if THIS line requests continuation
+  if [[ "$line" =~ \\$ ]]; then
+    # Backslash continuation — remove the backslash
+    current="${current%\\}"
+    current="$(printf '%s' "$current" | sed 's/[[:space:]]*$//')"
+    continuing=true
+  elif [[ "$line" =~ (\||&&|\|\|)[[:space:]]*$ ]]; then
+    # Operator continuation
+    continuing=true
+  else
+    continuing=false
+  fi
+done
+
+# Flush remaining
+[[ -n "$current" ]] && commands+=("$current")
+
+# Phase 3: Join separate commands
+result=""
+for cmd in "${commands[@]}"; do
+  # Collapse multiple spaces
+  cmd="$(printf '%s' "$cmd" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')"
+  [[ -z "$cmd" ]] && continue
+
+  if [[ "$cmd" == *$'\n'* ]]; then
+    # Heredoc — keep newlines
+    if [[ -z "$result" ]]; then
+      result="$cmd"
+    else
+      result+=$'\n'"$cmd"
+    fi
+  else
+    if [[ -z "$result" ]]; then
+      result="$cmd"
+    else
+      result+="; $cmd"
+    fi
+  fi
+done
+
+# ── Validation: bash -n syntax check ────────────────────────────
+if [[ "$result" == "$input" ]]; then
+  printf '%s' "$input"
+  exit 1
+fi
+
+if bash -n <<< "$result" 2>/dev/null; then
+  printf '%s' "$result"
+  exit 0
+else
+  printf '%s' "$input"
+  exit 1
+fi
