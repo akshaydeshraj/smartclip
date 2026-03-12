@@ -5,6 +5,10 @@
 
 **Paste multi-line shell commands that actually work.**
 
+<p align="center">
+  <img src="demo.gif" alt="smartclip demo" width="800">
+</p>
+
 You copy a command from a README, Stack Overflow, or ChatGPT. You paste it. Your terminal chokes:
 
 ```
