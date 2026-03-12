@@ -1,145 +1,109 @@
 # smartclip
 
-Fix multi-line shell commands before they hit your terminal.
+[![npm](https://img.shields.io/npm/v/smartclip-cli)](https://www.npmjs.com/package/smartclip-cli)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Copy a command from Stack Overflow, Claude, ChatGPT, or a README — paste it with Cmd+V — and smartclip silently joins the lines, strips prompt characters, and validates the syntax. No daemon, no polling, no background process. It hooks into your shell's paste mechanism and runs only when you paste.
+**Paste multi-line shell commands that actually work.**
 
-## The problem
-
-You copy this from a tutorial:
+You copy a command from a README, Stack Overflow, or ChatGPT. You paste it. Your terminal chokes:
 
 ```
 $ curl \
   -X POST \
   -H "Content-Type: application/json" \
-  -d '{"key": "value"}' \
-  https://api.example.com/endpoint
+  https://api.example.com
 ```
-
-You paste it into your terminal and get:
-
 ```
 zsh: command not found: -X
 zsh: command not found: -H
 ```
 
-smartclip fixes it before the shell sees it:
+smartclip hooks into your shell's paste and silently fixes it:
 
 ```
-curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' https://api.example.com/endpoint
+curl -X POST -H "Content-Type: application/json" https://api.example.com
 ```
 
-## What it fixes
+No daemon. No polling. No background process. ~100 lines of bash. It runs **only** when you paste.
 
-| Pattern | Before | After |
-|---------|--------|-------|
-| Backslash continuations | `cmd \`<br>`  --flag` | `cmd --flag` |
-| Pipe continuations | `cat file \|`<br>`  grep err` | `cat file \| grep err` |
-| Operator continuations | `cmd1 &&`<br>`cmd2` | `cmd1 && cmd2` |
-| Prompt prefixes | `$ git add .`<br>`$ git push` | `git add .; git push` |
-| Indented arguments | `sudo cat`<br>`  /long/path` | `sudo cat /long/path` |
-| Separate commands | `cd /tmp`<br>`git clone url`<br>`cd repo` | `cd /tmp; git clone url; cd repo` |
-| Heredocs | Preserved as-is with newlines | |
+## Why not just fix your terminal?
 
-## What it ignores
-
-Prose, JSON, YAML, URL lists, and anything that doesn't look like a shell command. Detection uses a scoring heuristic — if confidence is low, your clipboard is untouched. Every fix is validated with `bash -n` before insertion; if the result has invalid syntax, the original is pasted unchanged.
+You might be thinking "bracketed paste mode solves this" — it doesn't. Bracketed paste prevents line-by-line *execution*, but the **content itself** still arrives malformed: broken continuations, stray `$` prompts, operators split across lines. That's a content problem, not a terminal problem.
 
 ## Install
 
-### Homebrew (macOS / Linux)
-
 ```bash
-brew install akshaydeshraj/smartclip
+brew install akshaydeshraj/smartclip         # homebrew
+npm install -g smartclip-cli                  # npm
 ```
 
-Then add to your shell config:
+Then add one line to your shell config:
 
 ```bash
-# zsh (~/.zshrc)
+# pick your shell — zsh / bash / fish
 source "$(brew --prefix)/share/smartclip/integrations/smartclip.zsh"
-
-# bash (~/.bashrc)
 source "$(brew --prefix)/share/smartclip/integrations/smartclip.bash"
-
-# fish (~/.config/fish/config.fish)
 source (brew --prefix)/share/smartclip/integrations/smartclip.fish
 ```
 
-### npm
+<details>
+<summary>npm or source install paths</summary>
 
+**npm:**
 ```bash
-npm install -g smartclip-cli
-```
-
-Then add to your shell config:
-
-```bash
-# zsh (~/.zshrc)
 source "$(npm prefix -g)/lib/node_modules/smartclip-cli/integrations/smartclip.zsh"
-
-# bash (~/.bashrc)
-source "$(npm prefix -g)/lib/node_modules/smartclip-cli/integrations/smartclip.bash"
-
-# fish (~/.config/fish/config.fish)
-source (npm prefix -g)/lib/node_modules/smartclip-cli/integrations/smartclip.fish
 ```
 
-### From source
-
+**From source:**
 ```bash
 git clone https://github.com/akshaydeshraj/smartclip.git ~/smartclip
-cd ~/smartclip
-./install.sh
-```
-
-Then add to your shell config:
-
-```bash
-# zsh (~/.zshrc)
+cd ~/smartclip && ./install.sh
 source ~/smartclip/integrations/smartclip.zsh
-
-# bash (~/.bashrc)
-source ~/smartclip/integrations/smartclip.bash
-
-# fish (~/.config/fish/config.fish)
-source ~/smartclip/integrations/smartclip.fish
 ```
+</details>
 
-Restart your shell or `source` the config. That's it.
+Restart your shell. That's it. Paste with Cmd+V as usual.
 
-## Usage
+## What it fixes
 
-**You don't do anything.** Paste normally with Cmd+V (or your terminal's paste). smartclip intercepts the paste, fixes it if needed, and inserts the result. You'll see a brief `smartclip: fixed` indicator when it transforms something.
+| Pattern | Example |
+|---------|---------|
+| `\` continuations | `docker run \`<br>`  -p 8080:80 \`<br>`  nginx` |
+| Pipe / `&&` / `\|\|` splits | `cat log \|`<br>`  grep error` |
+| `$` / `>` prompts | `$ git add .`<br>`$ git push` |
+| Indented arguments | `sudo cat`<br>`  /very/long/path` |
+| Separate commands | `cd /tmp`<br>`git clone url` |
+| Heredocs | Preserved as-is |
 
-For manual use:
-
-```bash
-# Fix clipboard in-place
-smartclip fix
-
-# Pipe mode (works anywhere)
-pbpaste | smartclip | pbcopy        # macOS
-xclip -o | smartclip | xclip       # Linux/X11
-wl-paste | smartclip | wl-copy     # Linux/Wayland
-
-# Filter stdin
-echo "$ git status" | smartclip
-```
+**What it won't touch:** prose, JSON, YAML, URLs — anything that doesn't score high enough on the shell-command heuristic passes through unchanged.
 
 ## How it works
 
-1. **Detect** — Score-based heuristic checks if the pasted text is a shell command (known commands, operators, prompts, flags, redirections). Threshold of 3 required to act.
-2. **Fix** — Line-by-line state machine strips prompts, joins continuations, collapses separate commands.
-3. **Validate** — `bash -n` syntax check on the result. If invalid, the original is returned unchanged.
+```
+paste → detect → fix → validate → insert
+```
 
-Zero dependencies. Single bash script. Works in any terminal emulator.
+1. **Detect** — Score-based heuristic (known commands, operators, prompts, flags, redirections). Below threshold? Pass through unchanged.
+2. **Fix** — State machine joins continuations, strips prompts, collapses commands.
+3. **Validate** — `bash -n` syntax check. Invalid result? Original is pasted instead.
 
-## Run tests
+The shell integration overrides zsh's `bracketed-paste` widget (or bash/fish equivalent). Your normal Cmd+V triggers it — no new keybindings, no muscle memory change.
+
+## Manual use
 
 ```bash
-./test.sh
+smartclip fix                                # fix clipboard in-place
+pbpaste | smartclip | pbcopy                 # pipe mode (macOS)
+echo "$ git status" | smartclip              # stdin filter
 ```
+
+## Contributing
+
+```bash
+./test.sh                                    # run the test suite
+```
+
+PRs welcome. The entire tool is a single file: [`smartclip`](smartclip).
 
 ## License
 
