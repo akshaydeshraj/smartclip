@@ -1,6 +1,7 @@
 # smartclip
 
-[![tests](https://github.com/akshaydeshraj/smartclip/actions/workflows/test.yml/badge.svg)](https://github.com/akshaydeshraj/smartclip/actions/workflows/test.yml)
+[![tests](https://github.com/akshaydeshraj/smartclip/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/akshaydeshraj/smartclip/actions/workflows/test.yml)
+[![homebrew](https://img.shields.io/badge/brew-akshaydeshraj%2Fsmartclip-FBB040?logo=homebrew&logoColor=white)](https://github.com/akshaydeshraj/homebrew-smartclip)
 [![npm](https://img.shields.io/npm/v/smartclip-cli)](https://www.npmjs.com/package/smartclip-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
