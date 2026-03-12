@@ -91,7 +91,10 @@ if (( score < 3 )); then
 fi
 
 # ── Fixing: join lines intelligently ─────────────────────────────
-mapfile -t lines <<< "$input"
+lines=()
+while IFS= read -r _line; do
+  lines+=("$_line")
+done <<< "$input"
 
 # Phase 1: Strip prompt characters
 for i in "${!lines[@]}"; do
