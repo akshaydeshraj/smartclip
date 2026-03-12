@@ -1,5 +1,6 @@
 # smartclip
 
+[![tests](https://github.com/akshaydeshraj/smartclip/actions/workflows/test.yml/badge.svg)](https://github.com/akshaydeshraj/smartclip/actions/workflows/test.yml)
 [![npm](https://img.shields.io/npm/v/smartclip-cli)](https://www.npmjs.com/package/smartclip-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
